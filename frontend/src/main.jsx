@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { Download, Filter, FileUp, Plus, RefreshCw, Save, Search, Trash2 } from "lucide-react";
+import { Download, Filter, FileUp, Pencil, Plus, RefreshCw, Save, Search, Trash2, X } from "lucide-react";
 import "./styles.css";
 
 const API_BASE = "http://127.0.0.1:8000/api";
@@ -19,6 +19,20 @@ const initialForm = {
 
 const schoolLabels = { primary: "小学", middle: "中学" };
 
+function formatDate(date) {
+  return date.toISOString().slice(0, 10);
+}
+
+function getDefaultDateRange() {
+  const endDate = new Date();
+  const startDate = new Date();
+  startDate.setMonth(startDate.getMonth() - 1);
+  return {
+    startDate: formatDate(startDate),
+    endDate: formatDate(endDate),
+  };
+}
+
 function buildQuery(params) {
   const query = new URLSearchParams();
   Object.entries(params).forEach(([key, value]) => {
@@ -30,21 +44,34 @@ function buildQuery(params) {
 function App() {
   const [records, setRecords] = useState([]);
   const [items, setItems] = useState([]);
-  const [summary, setSummary] = useState({ inQuantity: 0, outQuantity: 0, stock: 0, items: [] });
+  const [summary, setSummary] = useState({
+    activeItemCount: 0,
+    inStockItemCount: 0,
+    negativeStockItemCount: 0,
+    totalValue: 0,
+    items: [],
+  });
   const [form, setForm] = useState(initialForm);
   const [newItem, setNewItem] = useState({ name: "", unit: "kg", unitPrice: "" });
   const [editItem, setEditItem] = useState({ id: "", name: "", unit: "kg", unitPrice: "" });
+  const [editingRecordId, setEditingRecordId] = useState(null);
+  const [showAbnormalStock, setShowAbnormalStock] = useState(false);
+  const defaultDateRange = useMemo(() => getDefaultDateRange(), []);
   const [filters, setFilters] = useState({
     school: "",
     recordType: "",
     keyword: "",
-    startDate: "",
-    endDate: "",
+    startDate: defaultDateRange.startDate,
+    endDate: defaultDateRange.endDate,
   });
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
 
   const query = useMemo(() => buildQuery(filters), [filters]);
+  const abnormalItems = useMemo(
+    () => (summary.items || []).filter((item) => Number(item.stock) < 0),
+    [summary.items]
+  );
 
   async function loadData() {
     setLoading(true);
@@ -113,19 +140,59 @@ function App() {
     event.preventDefault();
     setMessage("");
     try {
-      const response = await fetch(`${API_BASE}/records/`, {
-        method: "POST",
+      const url = editingRecordId ? `${API_BASE}/records/${editingRecordId}/` : `${API_BASE}/records/`;
+      const response = await fetch(url, {
+        method: editingRecordId ? "PATCH" : "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ...form, quantity: Number(form.quantity) }),
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "保存失败");
       setForm({ ...initialForm, school: form.school, recordType: form.recordType, itemId: form.itemId, unit: form.unit, occurredAt: form.occurredAt });
-      setMessage("记录已保存");
+      setEditingRecordId(null);
+      setMessage(editingRecordId ? "记录已修改" : "记录已保存");
       loadData();
     } catch (error) {
       setMessage(`保存失败：${error.message}`);
     }
+  }
+
+  function editRecord(record) {
+    setEditingRecordId(record.id);
+    setForm({
+      school: record.school,
+      recordType: record.recordType,
+      itemId: String(record.itemId || ""),
+      quantity: String(record.quantity),
+      unit: record.unit,
+      supplier: record.supplier || "",
+      operator: record.operator || "",
+      occurredAt: record.occurredAt,
+      remark: record.remark || "",
+    });
+    const item = items.find((current) => String(current.id) === String(record.itemId));
+    if (item) {
+      setEditItem({
+        id: String(item.id),
+        name: item.name,
+        unit: item.unit,
+        unitPrice: String(item.unitPrice || ""),
+      });
+    }
+    setMessage("正在修改记录");
+  }
+
+  function cancelRecordEdit() {
+    setEditingRecordId(null);
+    setForm((current) => ({
+      ...initialForm,
+      school: current.school,
+      recordType: current.recordType,
+      itemId: current.itemId,
+      unit: current.unit,
+      occurredAt: new Date().toISOString().slice(0, 10),
+    }));
+    setMessage("");
   }
 
   async function addItem() {
@@ -248,23 +315,69 @@ function App() {
       </header>
 
       <section className="stats" aria-label="库存概览">
-        <div>
-          <span>现存量</span>
-          <strong>{summary.stock.toFixed(2)}</strong>
-        </div>
-        <div>
-          <span>入库数量</span>
-          <strong>{summary.inQuantity.toFixed(2)}</strong>
-        </div>
-        <div>
-          <span>出库数量</span>
-          <strong>{summary.outQuantity.toFixed(2)}</strong>
-        </div>
-        <div>
-          <span>物品种类</span>
-          <strong>{summary.items.length}</strong>
-        </div>
+        <button className="statCard" type="button" onClick={() => setShowAbnormalStock(false)}>
+          <span>库存总金额</span>
+          <strong>{Number(summary.totalValue || 0).toFixed(2)}</strong>
+          <small>元</small>
+        </button>
+        <button className="statCard" type="button" onClick={() => setShowAbnormalStock(false)}>
+          <span>有库存物品</span>
+          <strong>{summary.inStockItemCount || 0}</strong>
+          <small>种</small>
+        </button>
+        <button
+          className={`statCard ${showAbnormalStock ? "active" : ""}`}
+          type="button"
+          onClick={() => setShowAbnormalStock((current) => !current)}
+        >
+          <span>库存异常</span>
+          <strong className={summary.negativeStockItemCount ? "dangerText" : ""}>{summary.negativeStockItemCount || 0}</strong>
+          <small>种</small>
+        </button>
+        <button className="statCard" type="button" onClick={() => setShowAbnormalStock(false)}>
+          <span>有效物品</span>
+          <strong>{summary.activeItemCount || 0}</strong>
+          <small>种</small>
+        </button>
       </section>
+
+      {showAbnormalStock && (
+        <section className="abnormalPanel" aria-label="库存异常明细">
+          <div className="panelTitle">
+            <Filter size={18} />
+            <h2>库存异常明细</h2>
+          </div>
+          <div className="tableWrap compactTable">
+            <table>
+              <thead>
+                <tr>
+                  <th>学校</th>
+                  <th>物品</th>
+                  <th>当前库存</th>
+                  <th>单价</th>
+                  <th>库存金额</th>
+                </tr>
+              </thead>
+              <tbody>
+                {abnormalItems.map((item) => (
+                  <tr key={`${item.school}-${item.itemName}-${item.unit}`}>
+                    <td>{schoolLabels[item.school]}</td>
+                    <td>{item.itemName}</td>
+                    <td className="dangerText">{Number(item.stock).toFixed(2)} {item.unit}</td>
+                    <td>{Number(item.unitPrice || 0).toFixed(2)}</td>
+                    <td>{Number(item.stockValue || 0).toFixed(2)}</td>
+                  </tr>
+                ))}
+                {!abnormalItems.length && (
+                  <tr>
+                    <td colSpan="5" className="empty">暂无库存异常</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
 
       {message && <div className="notice">{message}</div>}
 
@@ -272,88 +385,108 @@ function App() {
         <section className="panel formPanel">
           <div className="panelTitle">
             <Plus size={18} />
-            <h2>新增出入库</h2>
+            <h2>{editingRecordId ? "修改出入库" : "新增出入库"}</h2>
           </div>
           <form onSubmit={handleSubmit} className="recordForm">
-            <div className="segmented">
-              <button type="button" className={form.school === "primary" ? "active" : ""} onClick={() => updateForm("school", "primary")}>
-                小学
-              </button>
-              <button type="button" className={form.school === "middle" ? "active" : ""} onClick={() => updateForm("school", "middle")}>
-                中学
-              </button>
-            </div>
-            <div className="segmented">
-              <button type="button" className={form.recordType === "in" ? "active in" : ""} onClick={() => updateForm("recordType", "in")}>
-                入库
-              </button>
-              <button type="button" className={form.recordType === "out" ? "active out" : ""} onClick={() => updateForm("recordType", "out")}>
-                出库
-              </button>
+            <div className="formBlock">
+              <div className="blockTitle">记录类型</div>
+              <div className="segmented">
+                <button type="button" className={form.school === "primary" ? "active" : ""} onClick={() => updateForm("school", "primary")}>
+                  小学
+                </button>
+                <button type="button" className={form.school === "middle" ? "active" : ""} onClick={() => updateForm("school", "middle")}>
+                  中学
+                </button>
+              </div>
+              <div className="segmented">
+                <button type="button" className={form.recordType === "in" ? "active in" : ""} onClick={() => updateForm("recordType", "in")}>
+                  入库
+                </button>
+                <button type="button" className={form.recordType === "out" ? "active out" : ""} onClick={() => updateForm("recordType", "out")}>
+                  出库
+                </button>
+              </div>
             </div>
 
-            <label>
-              物品名称
-              <select value={form.itemId} onChange={(e) => selectItem(e.target.value)} required>
-                <option value="">请选择物品</option>
-                {items.map((item) => (
-                  <option key={item.id} value={item.id}>
-                    {item.name} / {item.unit} / {Number(item.unitPrice || 0).toFixed(2)}元
-                  </option>
-                ))}
-              </select>
-            </label>
-            <div className="inlineItemForm">
-              <input value={newItem.name} onChange={(e) => setNewItem((current) => ({ ...current, name: e.target.value }))} placeholder="新增物品名称" />
-              <input value={newItem.unit} onChange={(e) => setNewItem((current) => ({ ...current, unit: e.target.value }))} placeholder="单位" />
-              <input type="number" min="0" step="0.01" value={newItem.unitPrice} onChange={(e) => setNewItem((current) => ({ ...current, unitPrice: e.target.value }))} placeholder="单价" />
-              <button className="ghost" type="button" title="新增物品" onClick={addItem}>
-                <Plus size={16} />
-              </button>
-            </div>
-            <div className="itemEditor">
-              <input value={editItem.name} onChange={(e) => setEditItem((current) => ({ ...current, name: e.target.value }))} placeholder="修改物品名称" />
-              <input value={editItem.unit} onChange={(e) => setEditItem((current) => ({ ...current, unit: e.target.value }))} placeholder="单位" />
-              <input type="number" min="0" step="0.01" value={editItem.unitPrice} onChange={(e) => setEditItem((current) => ({ ...current, unitPrice: e.target.value }))} placeholder="单价" />
-              <button className="ghost" type="button" title="保存物品修改" onClick={saveItem} disabled={!editItem.id}>
-                <Save size={16} />
-              </button>
-              <button className="ghost dangerButton" type="button" title="删除物品" onClick={deleteItem} disabled={!editItem.id}>
-                <Trash2 size={16} />
-              </button>
-            </div>
-            <div className="twoCols">
+            <div className="formBlock">
+              <div className="blockTitle">物品与数量</div>
               <label>
-                日期
-                <input type="date" value={form.occurredAt} onChange={(e) => updateForm("occurredAt", e.target.value)} required />
+                物品名称
+                <select value={form.itemId} onChange={(e) => selectItem(e.target.value)} required>
+                  <option value="">请选择物品</option>
+                  {items.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.name} / {item.unit} / {Number(item.unitPrice || 0).toFixed(2)}元
+                    </option>
+                  ))}
+                </select>
               </label>
-            </div>
-            <div className="twoCols">
-              <label>
-                数量
-                <input type="number" min="0.01" step="0.01" value={form.quantity} onChange={(e) => updateForm("quantity", e.target.value)} required />
-              </label>
+              <div className="twoCols">
+                <label>
+                  日期
+                  <input type="date" value={form.occurredAt} onChange={(e) => updateForm("occurredAt", e.target.value)} required />
+                </label>
+                <label>
+                  数量
+                  <input type="number" min="0.01" step="0.01" value={form.quantity} onChange={(e) => updateForm("quantity", e.target.value)} required />
+                </label>
+              </div>
               <label>
                 单位
                 <input value={form.unit} onChange={(e) => updateForm("unit", e.target.value)} required />
               </label>
             </div>
-            <label>
-              供应商/领用人
-              <input value={form.supplier} onChange={(e) => updateForm("supplier", e.target.value)} />
-            </label>
-            <label>
-              经办人
-              <input value={form.operator} onChange={(e) => updateForm("operator", e.target.value)} />
-            </label>
-            <label>
-              备注
-              <textarea value={form.remark} onChange={(e) => updateForm("remark", e.target.value)} rows="3" />
-            </label>
-            <button className="primary iconText" type="submit">
-              <Plus size={18} />
-              保存记录
-            </button>
+
+            <div className="formBlock">
+              <div className="blockTitle">人员备注</div>
+              <label>
+                供应商/领用人
+                <input value={form.supplier} onChange={(e) => updateForm("supplier", e.target.value)} />
+              </label>
+              <label>
+                经办人
+                <input value={form.operator} onChange={(e) => updateForm("operator", e.target.value)} />
+              </label>
+              <label>
+                备注
+                <textarea value={form.remark} onChange={(e) => updateForm("remark", e.target.value)} rows="3" />
+              </label>
+            </div>
+
+            <div className="formBlock itemBlock">
+              <div className="blockTitle">物品维护</div>
+              <div className="inlineItemForm">
+                <input value={newItem.name} onChange={(e) => setNewItem((current) => ({ ...current, name: e.target.value }))} placeholder="新增物品名称" />
+                <input value={newItem.unit} onChange={(e) => setNewItem((current) => ({ ...current, unit: e.target.value }))} placeholder="单位" />
+                <input type="number" min="0" step="0.01" value={newItem.unitPrice} onChange={(e) => setNewItem((current) => ({ ...current, unitPrice: e.target.value }))} placeholder="单价" />
+                <button className="ghost" type="button" title="新增物品" onClick={addItem}>
+                  <Plus size={16} />
+                </button>
+              </div>
+              <div className="itemEditor">
+                <input value={editItem.name} onChange={(e) => setEditItem((current) => ({ ...current, name: e.target.value }))} placeholder="修改物品名称" />
+                <input value={editItem.unit} onChange={(e) => setEditItem((current) => ({ ...current, unit: e.target.value }))} placeholder="单位" />
+                <input type="number" min="0" step="0.01" value={editItem.unitPrice} onChange={(e) => setEditItem((current) => ({ ...current, unitPrice: e.target.value }))} placeholder="单价" />
+                <button className="ghost" type="button" title="保存物品修改" onClick={saveItem} disabled={!editItem.id}>
+                  <Save size={16} />
+                </button>
+                <button className="ghost dangerButton" type="button" title="删除物品" onClick={deleteItem} disabled={!editItem.id}>
+                  <Trash2 size={16} />
+                </button>
+              </div>
+            </div>
+            <div className="formActions">
+              <button className="primary iconText" type="submit">
+                <Save size={18} />
+                {editingRecordId ? "保存修改" : "保存记录"}
+              </button>
+              {editingRecordId && (
+                <button className="ghost iconText" type="button" onClick={cancelRecordEdit}>
+                  <X size={18} />
+                  取消
+                </button>
+              )}
+            </div>
           </form>
         </section>
 
@@ -380,22 +513,25 @@ function App() {
             </div>
           </div>
 
-          <div className="filters">
-            <select value={filters.school} onChange={(e) => updateFilter("school", e.target.value)}>
-              <option value="">全部学校</option>
-              <option value="primary">小学</option>
-              <option value="middle">中学</option>
-            </select>
-            <select value={filters.recordType} onChange={(e) => updateFilter("recordType", e.target.value)}>
-              <option value="">全部类型</option>
-              <option value="in">入库</option>
-              <option value="out">出库</option>
-            </select>
-            <input type="date" value={filters.startDate} onChange={(e) => updateFilter("startDate", e.target.value)} />
-            <input type="date" value={filters.endDate} onChange={(e) => updateFilter("endDate", e.target.value)} />
-            <div className="searchBox">
-              <Search size={16} />
-              <input value={filters.keyword} onChange={(e) => updateFilter("keyword", e.target.value)} placeholder="搜索物品/人员/供应商" />
+          <div className="queryBlock">
+            <div className="blockTitle">筛选条件</div>
+            <div className="filters">
+              <select value={filters.school} onChange={(e) => updateFilter("school", e.target.value)}>
+                <option value="">全部学校</option>
+                <option value="primary">小学</option>
+                <option value="middle">中学</option>
+              </select>
+              <select value={filters.recordType} onChange={(e) => updateFilter("recordType", e.target.value)}>
+                <option value="">全部类型</option>
+                <option value="in">入库</option>
+                <option value="out">出库</option>
+              </select>
+              <input type="date" value={filters.startDate} onChange={(e) => updateFilter("startDate", e.target.value)} />
+              <input type="date" value={filters.endDate} onChange={(e) => updateFilter("endDate", e.target.value)} />
+              <div className="searchBox">
+                <Search size={16} />
+                <input value={filters.keyword} onChange={(e) => updateFilter("keyword", e.target.value)} placeholder="搜索物品/人员/供应商" />
+              </div>
             </div>
           </div>
 
@@ -426,6 +562,9 @@ function App() {
                     <td>{record.operator || "-"}</td>
                     <td>{record.occurredAt}</td>
                     <td>
+                      <button className="iconButton" title="修改" onClick={() => editRecord(record)}>
+                        <Pencil size={16} />
+                      </button>
                       <button className="iconButton danger" title="删除" onClick={() => deleteRecord(record.id)}>
                         <Trash2 size={16} />
                       </button>

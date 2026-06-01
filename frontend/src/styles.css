@@ -59,17 +59,26 @@ h1 {
   margin-bottom: 16px;
 }
 
-.stats div,
+.statCard,
 .panel,
-.recordsArea {
+.recordsArea,
+.abnormalPanel {
   background: #fff;
   border: 1px solid #d8e2dd;
   border-radius: 8px;
   box-shadow: 0 10px 24px rgba(35, 61, 52, 0.06);
 }
 
-.stats div {
+.statCard {
   padding: 16px;
+  text-align: left;
+  display: block;
+}
+
+.statCard:hover,
+.statCard.active {
+  border-color: #1f8a70;
+  box-shadow: 0 12px 26px rgba(31, 138, 112, 0.12);
 }
 
 .stats span {
@@ -82,6 +91,32 @@ h1 {
 .stats strong {
   font-size: 24px;
   color: #0f4b3f;
+}
+
+.stats small {
+  margin-left: 4px;
+  color: #66756f;
+}
+
+.stats .dangerText {
+  color: #b91c1c;
+}
+
+.abnormalPanel {
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+.abnormalPanel .tableWrap {
+  margin-top: 12px;
+}
+
+.compactTable table {
+  min-width: 620px;
+}
+
+.dangerText {
+  color: #b91c1c;
 }
 
 .workspace {
@@ -111,6 +146,32 @@ h1 {
   display: grid;
   gap: 12px;
   margin-top: 14px;
+}
+
+.formBlock,
+.queryBlock {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid #e2ebe7;
+  border-radius: 8px;
+  background: #fbfdfc;
+}
+
+.itemBlock {
+  background: #f7faf8;
+}
+
+.blockTitle {
+  color: #12332d;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.formActions {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
 }
 
 label {
@@ -148,14 +209,14 @@ textarea:focus {
 .inlineItemForm,
 .itemEditor {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 64px 86px 44px 44px;
+  grid-template-columns: minmax(0, 1fr) 58px 78px 40px 40px;
   gap: 8px;
 }
 
 .inlineItemForm .ghost,
 .itemEditor .ghost {
   padding: 0;
-  min-width: 44px;
+  min-width: 40px;
 }
 
 .itemEditor {
@@ -233,7 +294,7 @@ textarea:focus {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 12px;
+  margin-bottom: 14px;
 }
 
 .actions {
@@ -259,7 +320,10 @@ textarea:focus {
   display: grid;
   grid-template-columns: 130px 130px 150px 150px minmax(200px, 1fr);
   gap: 10px;
-  margin-bottom: 12px;
+}
+
+.queryBlock {
+  margin-bottom: 14px;
 }
 
 .searchBox {
@@ -334,6 +398,7 @@ th {
   border-radius: 6px;
   background: #fff;
   color: #52615c;
+  margin-right: 6px;
 }
 
 .iconButton.danger:hover {

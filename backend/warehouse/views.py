@@ -3,7 +3,7 @@ import json
 from decimal import Decimal, InvalidOperation
 from io import TextIOWrapper
 
-from django.db.models import Case, DecimalField, F, Q, Sum, Value, When
+from django.db.models import Q
 from django.db import IntegrityError
 from django.http import HttpResponse, JsonResponse
 from django.utils.dateparse import parse_date
@@ -160,6 +160,34 @@ def create_record_from_data(data):
     return record
 
 
+def update_record_from_data(record, data):
+    try:
+        item = WarehouseItem.objects.get(pk=data["itemId"], is_active=True)
+    except WarehouseItem.DoesNotExist:
+        raise ValueError("物品不存在或未启用")
+
+    occurred_at = parse_import_date(data.get("occurredAt"))
+    if occurred_at is None:
+        raise ValueError("日期格式不正确")
+
+    quantity = Decimal(str(data.get("quantity")))
+    if quantity <= 0:
+        raise ValueError("数量必须大于 0")
+
+    record.school = data["school"]
+    record.record_type = data["recordType"]
+    record.item = item
+    record.item_name = item.name
+    record.quantity = quantity
+    record.unit = str(data.get("unit") or item.unit).strip() or item.unit
+    record.supplier = str(data.get("supplier", "")).strip()
+    record.operator = str(data.get("operator", "")).strip()
+    record.occurred_at = occurred_at
+    record.remark = str(data.get("remark", "")).strip()
+    record.save()
+    return record
+
+
 @csrf_exempt
 @require_http_methods(["GET", "POST"])
 def items(request):
@@ -244,46 +272,84 @@ def records(request):
 
 
 @csrf_exempt
-@require_http_methods(["DELETE"])
+@require_http_methods(["PATCH", "PUT", "DELETE"])
 def record_detail(request, record_id):
     try:
         record = InventoryRecord.objects.get(pk=record_id)
     except InventoryRecord.DoesNotExist:
         return JsonResponse({"error": "记录不存在"}, status=404)
+
+    if request.method in ["PATCH", "PUT"]:
+        data = parse_body(request)
+        required = ["school", "recordType", "itemId", "quantity", "occurredAt"]
+        missing = [field for field in required if not data.get(field)]
+        if missing:
+            return JsonResponse({"error": f"缺少字段: {', '.join(missing)}"}, status=400)
+        try:
+            record = update_record_from_data(record, data)
+            return JsonResponse(record_to_dict(record))
+        except (ValueError, KeyError, InvalidOperation) as error:
+            return JsonResponse({"error": str(error)}, status=400)
+
     record.delete()
     return JsonResponse({"ok": True})
 
 
 @require_http_methods(["GET"])
 def summary(request):
-    qs = filtered_records(request)
-    signed_quantity = Case(
-        When(record_type=InventoryRecord.TYPE_IN, then=F("quantity")),
-        When(record_type=InventoryRecord.TYPE_OUT, then=-F("quantity")),
-        default=Value(0),
-        output_field=DecimalField(max_digits=10, decimal_places=2),
+    qs = InventoryRecord.objects.select_related("item").all()
+    school = request.GET.get("school")
+    keyword = request.GET.get("keyword")
+    if school:
+        qs = qs.filter(school=school)
+    if keyword:
+        qs = qs.filter(
+            Q(item_name__icontains=keyword)
+            | Q(supplier__icontains=keyword)
+            | Q(operator__icontains=keyword)
+        )
+
+    stock_items = {}
+    for record in qs:
+        key = (
+            record.school,
+            record.item_id or f"name:{record.item_name}",
+            record.unit,
+        )
+        if key not in stock_items:
+            stock_items[key] = {
+                "school": record.school,
+                "itemName": record.item.name if record.item else record.item_name,
+                "unit": record.unit,
+                "unitPrice": record.item.unit_price if record.item else Decimal("0"),
+                "stock": Decimal("0"),
+            }
+        if record.record_type == InventoryRecord.TYPE_IN:
+            stock_items[key]["stock"] += record.quantity
+        elif record.record_type == InventoryRecord.TYPE_OUT:
+            stock_items[key]["stock"] -= record.quantity
+
+    items = sorted(
+        stock_items.values(),
+        key=lambda item: (item["school"], item["itemName"], item["unit"]),
     )
-    totals = qs.aggregate(
-        inQuantity=Sum("quantity", filter=Q(record_type=InventoryRecord.TYPE_IN)),
-        outQuantity=Sum("quantity", filter=Q(record_type=InventoryRecord.TYPE_OUT)),
-        stock=Sum(signed_quantity),
-    )
-    items = (
-        qs.values("school", "item_name", "unit")
-        .annotate(stock=Sum(signed_quantity))
-        .order_by("school", "item_name")
-    )
+    in_stock_items = [item for item in items if item["stock"] > 0]
+    negative_stock_items = [item for item in items if item["stock"] < 0]
+    total_value = sum((item["stock"] * item["unitPrice"] for item in in_stock_items), Decimal("0"))
     return JsonResponse(
         {
-            "inQuantity": float(totals["inQuantity"] or 0),
-            "outQuantity": float(totals["outQuantity"] or 0),
-            "stock": float(totals["stock"] or 0),
+            "activeItemCount": WarehouseItem.objects.filter(is_active=True).count(),
+            "inStockItemCount": len(in_stock_items),
+            "negativeStockItemCount": len(negative_stock_items),
+            "totalValue": float(total_value),
             "items": [
                 {
                     "school": item["school"],
-                    "itemName": item["item_name"],
+                    "itemName": item["itemName"],
                     "unit": item["unit"],
                     "stock": float(item["stock"] or 0),
+                    "unitPrice": float(item["unitPrice"] or 0),
+                    "stockValue": float((item["stock"] or 0) * (item["unitPrice"] or 0)),
                 }
                 for item in items
             ],
